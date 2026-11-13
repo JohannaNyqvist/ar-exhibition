@@ -27,10 +27,9 @@ async function startAR(){
   try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'}}});}
   finally{stream?.getTracks().forEach(t=>t.stop());}
   if(!arActive)return;
-  status('Requesting GPS permission…');
-  const pos=await getPosition();
-  if(!arActive)return;
-  $('gps-readout').textContent=`GPS accuracy ±${Math.round(pos.coords.accuracy)} m`;
+  // Do not block the camera on a GPS fix: location can take a long time outdoors.
+  status('Opening AR camera…');
+  $('gps-readout').textContent='Waiting for GPS fix…';
   $('intro').hidden=true;$('map-panel').hidden=true;$('art-panel').hidden=true;$('ar-panel').hidden=false;
   status('Opening AR camera…');
   const root=$('ar-root');root.replaceChildren();
@@ -40,14 +39,14 @@ async function startAR(){
   scene.setAttribute('arjs','sourceType: webcam; videoTexture: true; debugUIEnabled: false');
   exhibition.artworks.forEach(a=>{const img=document.createElement('a-image');img.setAttribute('src',a.image);img.setAttribute('gps-new-entity-place',`latitude: ${a.latitude}; longitude: ${a.longitude}`);img.setAttribute('width',a.width);img.setAttribute('height',a.height);img.setAttribute('position',`0 ${a.altitude} 0`);img.setAttribute('rotation',`0 ${-a.bearing} 0`);img.setAttribute('material','side: double; transparent: true; alphaTest: 0.01');scene.appendChild(img);});
   const camera=document.createElement('a-camera');camera.setAttribute('gps-new-camera','gpsMinDistance: 1');camera.setAttribute('rotation-reader','');scene.appendChild(camera);root.appendChild(scene);
-  watchId=navigator.geolocation.watchPosition(p=>{$('gps-readout').textContent=`GPS accuracy ±${Math.round(p.coords.accuracy)} m`;},e=>{$('gps-readout').textContent=`GPS unavailable: ${e.message}`;},{enableHighAccuracy:true,maximumAge:1000,timeout:20000});
+  watchId=navigator.geolocation.watchPosition(p=>{$('gps-readout').textContent=`GPS accuracy ±${Math.round(p.coords.accuracy)} m`;},e=>{$('gps-readout').textContent=`GPS: ${e.message}. Camera can still work.`;},{enableHighAccuracy:true,maximumAge:10000,timeout:30000});
   // A-Frame scene loaded does not guarantee camera video is playing.
   let attempts=0;
   const checkVideo=()=>{
     if(!arActive)return;
     const videos=[...document.querySelectorAll('video')];
     if(videos.some(v=>v.readyState>=2 && v.videoWidth>0)){status('AR running');return;}
-    if(++attempts>=15){status('Camera did not start — close AR and retry');$('gps-readout').textContent='Camera initialization timed out. Try Chrome on Android or Safari on iPhone.';return;}
+    if(++attempts>=20){status('AR camera did not start');$('gps-readout').textContent='AR.js video did not initialize. Camera permission works, but AR renderer needs further debugging.';return;}
     startupTimer=setTimeout(checkVideo,1000);
   };
   startupTimer=setTimeout(checkVideo,1000);
@@ -60,3 +59,4 @@ async function startAR(){
 }
 function stopAR(){arActive=false;clearTimeout(startupTimer);if(watchId!==undefined){navigator.geolocation.clearWatch(watchId);watchId=undefined;}$('ar-root').replaceChildren();$('ar-panel').hidden=true;status('Ready');}
 $('start-ar').addEventListener('click',startAR);$('exit-ar').addEventListener('click',()=>view('intro'));
+
