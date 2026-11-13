@@ -11,16 +11,52 @@ document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click',()
 function initMap(){if(map){setTimeout(()=>map.invalidateSize(),100);return;}map=L.map('map').setView([exhibition.artworks[0].latitude,exhibition.artworks[0].longitude],16);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);const pins=exhibition.artworks.map(a=>L.marker([a.latitude,a.longitude]).addTo(map).bindPopup(`<b>${escapeHtml(a.title)}</b><br>${escapeHtml(a.artist)}`));const bounds=L.featureGroup(pins).getBounds();if(bounds.isValid())map.fitBounds(bounds.pad(.25));if(navigator.geolocation)navigator.geolocation.getCurrentPosition(p=>{userMarker=L.circleMarker([p.coords.latitude,p.coords.longitude],{radius:8,color:'#6542bd',fillColor:'#d9b8ff',fillOpacity:1}).addTo(map).bindPopup('Your approximate location');},()=>{}, {enableHighAccuracy:true,timeout:12000});}
 // GPS placement: the AR scene uses a location-based AR.js component set.
 // The AR.js build below is version-pinned; verify device/browser compatibility before an event.
-function startAR(){
- if(!window.isSecureContext){alert('Open this exhibition over HTTPS (or localhost).');return;}
- if(!navigator.geolocation){alert('This browser does not support GPS.');return;}
- if(!window.AFRAME){alert('The AR engine could not load. Check your connection.');return;}
- arActive=true;$('intro').hidden=true;$('map-panel').hidden=true;$('art-panel').hidden=true;$('ar-panel').hidden=false;status('Starting AR');
- const root=$('ar-root');root.innerHTML='';
- const scene=document.createElement('a-scene');scene.setAttribute('embedded','');scene.setAttribute('vr-mode-ui','enabled: false');scene.setAttribute('renderer','antialias: true; alpha: true');scene.setAttribute('arjs','sourceType: webcam; videoTexture: true; debugUIEnabled: false');
- exhibition.artworks.forEach(a=>{const img=document.createElement('a-image');img.setAttribute('src',a.image);img.setAttribute('gps-new-entity-place',`latitude: ${a.latitude}; longitude: ${a.longitude}`);img.setAttribute('width',a.width);img.setAttribute('height',a.height);img.setAttribute('position',`0 ${a.altitude} 0`);img.setAttribute('rotation',`0 ${-a.bearing} 0`);img.setAttribute('material','side: double; transparent: true; alphaTest: 0.01');scene.appendChild(img);});
- const camera=document.createElement('a-camera');camera.setAttribute('gps-new-camera','gpsMinDistance: 1');camera.setAttribute('rotation-reader','');scene.appendChild(camera);root.appendChild(scene);
- watchId=navigator.geolocation.watchPosition(p=>{$('gps-readout').textContent=`GPS accuracy ±${Math.round(p.coords.accuracy)} m`;status('AR running');},e=>{$('gps-readout').textContent=`GPS unavailable: ${e.message}`;status('GPS issue');},{enableHighAccuracy:true,maximumAge:1000,timeout:20000});
+let startupTimer;
+function getPosition(){return new Promise((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:15000,maximumAge:0}));}
+async function startAR(){
+ if(arActive)return;
+ if(!window.isSecureContext){alert('Open over HTTPS.');return;}
+ if(!navigator.mediaDevices?.getUserMedia){alert('Camera access is not supported in this browser.');return;}
+ if(!navigator.geolocation){alert('Location is not supported.');return;}
+ if(!window.AFRAME || !AFRAME.components['gps-new-camera']){alert('AR libraries failed to load. Try refreshing with a good connection.');return;}
+ arActive=true; $('start-ar').disabled=true; status('Requesting camera permission…');
+ try{
+  // Explicit request triggers the browser permission dialog. Release the stream
+  // before AR.js opens its own rear camera stream.
+  let stream;
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'}}});}
+  finally{stream?.getTracks().forEach(t=>t.stop());}
+  if(!arActive)return;
+  status('Requesting GPS permission…');
+  const pos=await getPosition();
+  if(!arActive)return;
+  $('gps-readout').textContent=`GPS accuracy ±${Math.round(pos.coords.accuracy)} m`;
+  $('intro').hidden=true;$('map-panel').hidden=true;$('art-panel').hidden=true;$('ar-panel').hidden=false;
+  status('Opening AR camera…');
+  const root=$('ar-root');root.replaceChildren();
+  const scene=document.createElement('a-scene');
+  scene.setAttribute('embedded','');scene.setAttribute('vr-mode-ui','enabled: false');
+  scene.setAttribute('renderer','antialias: true; alpha: true');
+  scene.setAttribute('arjs','sourceType: webcam; videoTexture: true; debugUIEnabled: false');
+  exhibition.artworks.forEach(a=>{const img=document.createElement('a-image');img.setAttribute('src',a.image);img.setAttribute('gps-new-entity-place',`latitude: ${a.latitude}; longitude: ${a.longitude}`);img.setAttribute('width',a.width);img.setAttribute('height',a.height);img.setAttribute('position',`0 ${a.altitude} 0`);img.setAttribute('rotation',`0 ${-a.bearing} 0`);img.setAttribute('material','side: double; transparent: true; alphaTest: 0.01');scene.appendChild(img);});
+  const camera=document.createElement('a-camera');camera.setAttribute('gps-new-camera','gpsMinDistance: 1');camera.setAttribute('rotation-reader','');scene.appendChild(camera);root.appendChild(scene);
+  watchId=navigator.geolocation.watchPosition(p=>{$('gps-readout').textContent=`GPS accuracy ±${Math.round(p.coords.accuracy)} m`;},e=>{$('gps-readout').textContent=`GPS unavailable: ${e.message}`;},{enableHighAccuracy:true,maximumAge:1000,timeout:20000});
+  // A-Frame scene loaded does not guarantee camera video is playing.
+  let attempts=0;
+  const checkVideo=()=>{
+    if(!arActive)return;
+    const videos=[...document.querySelectorAll('video')];
+    if(videos.some(v=>v.readyState>=2 && v.videoWidth>0)){status('AR running');return;}
+    if(++attempts>=15){status('Camera did not start — close AR and retry');$('gps-readout').textContent='Camera initialization timed out. Try Chrome on Android or Safari on iPhone.';return;}
+    startupTimer=setTimeout(checkVideo,1000);
+  };
+  startupTimer=setTimeout(checkVideo,1000);
+ }catch(e){
+   console.error('AR startup failed',e);
+   status('AR start failed');
+   alert(`Could not start AR: ${e.message||e.name||'Unknown error'}`);
+   stopAR();
+ }finally{$('start-ar').disabled=false;}
 }
-function stopAR(){arActive=false;if(watchId!==undefined){navigator.geolocation.clearWatch(watchId);watchId=undefined;}$('ar-root').replaceChildren();$('ar-panel').hidden=true;status('Ready');}
+function stopAR(){arActive=false;clearTimeout(startupTimer);if(watchId!==undefined){navigator.geolocation.clearWatch(watchId);watchId=undefined;}$('ar-root').replaceChildren();$('ar-panel').hidden=true;status('Ready');}
 $('start-ar').addEventListener('click',startAR);$('exit-ar').addEventListener('click',()=>view('intro'));
